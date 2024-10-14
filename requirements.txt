@@ -1,0 +1,12 @@
+fastapi==0.88.0
+uvicorn==0.20.0
+pymongo==4.0.2
+python-dotenv==0.21.0
+python-multipart==0.0.5
+passlib==1.7.4
+python-jose==3.3.0
+Pillow==9.3.0
+reverse_geocoder==1.5.1  # Ensure this is present
+pycountry==22.3.5
+pyotp==2.8.0
+bcrypt
