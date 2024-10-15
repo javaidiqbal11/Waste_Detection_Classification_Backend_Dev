@@ -5,7 +5,7 @@ from app.dependencies import get_current_user
 
 router = APIRouter()
 
-@router.post("/", dependencies=[Depends(get_current_user)])
+@router.post("/levels")
 async def upload_levels(file: UploadFile = File(...)):
     try:
         content = await file.read()
@@ -17,7 +17,7 @@ async def upload_levels(file: UploadFile = File(...)):
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"Internal Server Error {err}")
 
-@router.get("/", dependencies=[Depends(get_current_user)])
+@router.get("/levels", dependencies=[Depends(get_current_user)])
 async def get_levels(lang: str = "en"):  # Default language is English
     try:
         db = create_mongo_connection()

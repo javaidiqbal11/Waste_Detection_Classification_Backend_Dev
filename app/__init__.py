@@ -22,6 +22,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(data.router, prefix="/save_data")
-app.include_router(levels.router, prefix="/levels")
-app.include_router(users.router, prefix="/users")
+# Connection verification endpoint
+@app.get("/")
+async def main():
+    return "Hello World"
+
+# Include routers without prefixes
+app.include_router(data.router)
+app.include_router(levels.router)
+app.include_router(users.router)
+
