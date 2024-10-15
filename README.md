@@ -13,3 +13,26 @@ This backend system is designed to support the development of an AI-driven waste
 - **Data Management:*** Allows for CRUD operations on waste data and images.
 - **Integration-Ready:** Built to integrate with frontend interfaces, databases, and mobile applications.
 
+## Installation
+To install and run this backend service locally, follow these steps:
+
+1. Clone the Repository:
+
+```bash
+git clone https://github.com/javaidiqbal11/Waste_Backend_Dev.git
+cd Waste_Backend_Dev
+```
+2. Install Dependencies: This project uses Python 3.12 and requires dependencies listed in the requirements.txt file.
+
+```bash
+pip install -r requirements.txt
+```
+3. Set Up YOLO Model: Download the pre-trained YOLO model and add it to the designated folder.
+
+4. Configure Environment Variables: Create a .env file with necessary configurations for database connections and API keys.
+
+5. Run the Application:
+
+```bash
+python app.py
+```
