@@ -2,7 +2,6 @@ import os
 import shutil
 from bson import ObjectId
 from PIL import Image
-import uuid
 from app.utils import create_mongo_connection
 
 def save_image(user_id, image_file):
@@ -20,7 +19,7 @@ def save_image(user_id, image_file):
 def save_data_to_db(payload):
     try:
         db = create_mongo_connection()
-        db["wastes_copy"].insert_one(payload)  # Updated collection name
+        db["wastes_copy"].insert_one(payload)
     except Exception as e:
         raise Exception(f"Internal Server Error: {str(e)}")
 

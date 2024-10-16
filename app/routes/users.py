@@ -1,98 +1,215 @@
 import os
 import shutil
 import pyotp
-from fastapi import APIRouter, Body, HTTPException, UploadFile, File, Depends
+import uuid
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Body, HTTPException, UploadFile, File, Query, Depends
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
-from app.schemas import User, OTPRequest, Token
-from app.utils import create_mongo_connection, derive_secret_key, create_access_token
+from app.schemas import OTPRequest, Token
+from app.utils import create_mongo_connection
 from app.dependencies import get_current_user
-from passlib.context import CryptContext
+from jose import jwt
 
 router = APIRouter()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-@router.post("/generate-otp")
-def generate_otp(phone_number: str = Body(...)):
-    secret_key = derive_secret_key(phone_number)
-    totp = pyotp.TOTP(secret_key, interval=300)
-    otp = totp.now()
-    # Send OTP via SMS (implementation required)
-    return {"message": "OTP generated and sent"}
+# Ensure SECRET_KEY is defined for JWT
+SECRET_KEY = os.getenv("SECRET_KEY", "default_secret_key").encode()
+ALGORITHM = "HS256"
 
-@router.post("/verify-otp")
-def verify_otp(otp_request: OTPRequest):
-    secret_key = derive_secret_key(otp_request.phone_number)
-    totp = pyotp.TOTP(secret_key, interval=300)
-    if totp.verify(otp_request.otp):
-        return {"message": "OTP is valid"}
-    else:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+# Helper to create a JWT access token with a valid secret key
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=60))
+    to_encode.update({"exp": expire})
 
+    if not isinstance(SECRET_KEY, (str, bytes)):
+        raise ValueError("SECRET_KEY must be a string or bytes-formatted key.")
+    
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# Check if User Exists endpoint
+@router.get("/user_exists/")
+async def user_exists(phone_number: str, device_id: str):
+    try:
+        db = create_mongo_connection()
+        user = db["users"].find_one({"phone_number": phone_number, "device_id": device_id})
+        return JSONResponse(status_code=200, content={"exists": bool(user)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Database error: {e}"})
+
+# Register User endpoint
 @router.post("/register/")
 async def register_user(
-    username: str = Body(...),
-    password: str = Body(...),
     phone_number: str = Body(...),
     device_id: str = Body(...),
-    first_name: str = Body(None),
-    last_name: str = Body(None),
+    first_name: str = None,
+    last_name: str = None,
     profile_image: UploadFile = File(None)
 ):
-    db = create_mongo_connection()
-    find_user = db["users"].find_one({"phone_number": phone_number})
-    if find_user:
-        return JSONResponse(status_code=400, content={"message": "User already exists"})
+    try:
+        db = create_mongo_connection()
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Database connection error: {e}"}
+        )
 
-    hashed_password = pwd_context.hash(password)
+    try:
+        find_user = db["users"].find_one({"phone_number": phone_number})
+        if find_user:
+            return JSONResponse(status_code=400, content={"message": "User already exists"})
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Database error while checking user existence: {e}"}
+        )
+
     user_data = {
-        "username": username,
-        "password": hashed_password,
-        "phone_number": phone_number,
-        "device_id": device_id,
         "first_name": first_name,
         "last_name": last_name,
+        "phone_number": phone_number,
+        "device_id": device_id,
         "is_active": True,
         "profile_image": None,
     }
 
     if profile_image:
-        file_location = f"images/{phone_number}/profile_image/{profile_image.filename}"
-        os.makedirs(os.path.dirname(file_location), exist_ok=True)
-        with open(file_location, "wb+") as file_object:
-            file_object.write(profile_image.file.read())
-        user_data["profile_image"] = file_location
+        try:
+            file_location = f"images/{phone_number}/profile_image/{profile_image.filename}"
+            os.makedirs(os.path.dirname(file_location), exist_ok=True)
+            with open(file_location, "wb+") as file_object:
+                file_object.write(profile_image.file.read())
+            user_data["profile_image"] = file_location
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"message": f"File saving error: {e}"}
+            )
 
-    db["users"].insert_one(user_data)
-    access_token = create_access_token(data={"sub": phone_number})
-    return JSONResponse(
-        status_code=200,
-        content={"access_token": access_token, "token_type": "bearer"},
-    )
+    try:
+        db["users"].insert_one(user_data)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Database insertion error: {e}"}
+        )
 
+    try:
+        access_token = create_access_token(data={"sub": phone_number})
+        return JSONResponse(
+            status_code=200,
+            content={"access_token": access_token, "token_type": "bearer"},
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Token generation error: {e}"}
+        )
+
+# Save Data with Approved Field
+@router.post("/save_data/")
+async def save_data(
+    image_file: UploadFile,
+    latitude: float,
+    longitude: float,
+    level: str,
+    token: str = Depends(get_current_user),
+):
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    phone_number = payload.get("sub")
+
+    if not os.path.exists(f"images/{phone_number}"):
+        os.makedirs(f"images/{phone_number}")
+
+    try:
+        with open(f"images/{phone_number}/{image_file.filename}", "wb") as buffer:
+            shutil.copyfileobj(image_file.file, buffer)
+        image_path = f"images/{phone_number}/{image_file.filename}"
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Internal Server Error IMG: {str(e)}"
+        )
+
+    try:
+        db = create_mongo_connection()
+        payload = {
+            "phone_number": phone_number,
+            "image_path": image_path,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "latitude": latitude,
+            "longitude": longitude,
+            "country": get_country_name(latitude, longitude),
+            "level": level,
+            "annotations": {"annotations": []},
+            "cropped_paths": [],
+            "approved": False  # Set approved field to False by default
+        }
+        db["wastes_copy"].insert_one(payload)
+
+        return JSONResponse(
+            status_code=200, content={"message": "Data saved successfully"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+# Generate OTP endpoint
+@router.post("/generate-otp/")
+def generate_otp(phone_number: str = Body(...)):
+    try:
+        secret_key = derive_secret_key(phone_number)
+        totp = pyotp.TOTP(secret_key, interval=300)
+        otp = totp.now()
+        return {"message": "OTP generated and sent"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"OTP generation error: {e}"})
+
+# Verify OTP endpoint
+@router.post("/verify-otp/")
+def verify_otp(otp_request: OTPRequest):
+    try:
+        secret_key = derive_secret_key(otp_request.phone_number)
+        totp = pyotp.TOTP(secret_key, interval=300)
+        if totp.verify(otp_request.otp):
+            return {"message": "OTP is valid"}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"OTP verification error: {e}"})
+
+# Login User endpoint
 @router.post("/login/", response_model=Token)
-async def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
-    db = create_mongo_connection()
-    username = form_data.username
-    password = form_data.password
-    find_user = db["users"].find_one({"username": username})
-    if not find_user:
-        raise HTTPException(status_code=400, detail="User doesn't exist")
-    if not pwd_context.verify(password, find_user["password"]):
-        raise HTTPException(status_code=400, detail="Invalid password")
-    access_token = create_access_token(data={"sub": find_user["phone_number"]})
-    return {"access_token": access_token, "token_type": "bearer"}
+async def login_user(phone_number: str = Body(...), device_id: str = Body(...)):
+    try:
+        db = create_mongo_connection()
+        find_user = db["users"].find_one({"phone_number": phone_number, "device_id": device_id})
+        if not find_user:
+            raise HTTPException(status_code=400, detail="User does not exist")
+        access_token = create_access_token(data={"sub": find_user["phone_number"]})
+        return {"access_token": access_token, "token_type": "bearer"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Login error: {e}"})
 
-@router.get("/me", dependencies=[Depends(get_current_user)])
+# Read Users Me endpoint
+@router.get("users/me", dependencies=[Depends(get_current_user)])
 async def read_users_me(token: str = Depends(get_current_user)):
-    db = create_mongo_connection()
-    phone_number = token
-    find_user = db["users"].find_one({"phone_number": phone_number})
-    if not find_user:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    find_user["_id"] = str(find_user["_id"])
-    return JSONResponse(status_code=200, content={"message": "Authenticated", "data": find_user})
+    try:
+        db = create_mongo_connection()
+        phone_number = token
+        find_user = db["users"].find_one({"phone_number": phone_number})
+        if not find_user:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        find_user["_id"] = str(find_user["_id"])
+        return JSONResponse(status_code=200, content={"message": "Authenticated", "data": find_user})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Read user error: {e}"})
 
+# Link Clicked endpoint
+@router.get("/link/clicked")
+async def link_clicked(linkid: str = Query(...)):
+    return JSONResponse(status_code=200, content={"message": f"Link with ID {linkid} clicked"})
+
+# Update Profile endpoint
 @router.patch("/update_profile/", dependencies=[Depends(get_current_user)])
 async def update_profile(
     first_name: str = Body(None),
@@ -100,47 +217,57 @@ async def update_profile(
     profile_image: UploadFile = File(None),
     token: str = Depends(get_current_user)
 ):
-    db = create_mongo_connection()
-    phone_number = token
-    find_user = db["users"].find_one({"phone_number": phone_number})
-    if not find_user:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    try:
+        db = create_mongo_connection()
+        phone_number = token
+        find_user = db["users"].find_one({"phone_number": phone_number})
+        if not find_user:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
 
-    update_data = {}
-    if first_name:
-        update_data["first_name"] = first_name
-    if last_name:
-        update_data["last_name"] = last_name
-    if profile_image:
-        file_location = f"images/{phone_number}/profile_image/{profile_image.filename}"
-        os.makedirs(os.path.dirname(file_location), exist_ok=True)
-        with open(file_location, "wb+") as file_object:
-            file_object.write(profile_image.file.read())
-        update_data["profile_image"] = file_location
+        update_data = {}
+        if first_name:
+            update_data["first_name"] = first_name
+        if last_name:
+            update_data["last_name"] = last_name
+        if profile_image:
+            file_location = f"images/{phone_number}/profile_image/{profile_image.filename}"
+            os.makedirs(os.path.dirname(file_location), exist_ok=True)
+            with open(file_location, "wb+") as file_object:
+                file_object.write(profile_image.file.read())
+            update_data["profile_image"] = file_location
 
-    db["users"].find_one_and_update({"phone_number": phone_number}, {"$set": update_data})
-    return JSONResponse(status_code=200, content={"message": "Profile updated successfully"})
+        db["users"].find_one_and_update({"phone_number": phone_number}, {"$set": update_data})
+        return JSONResponse(status_code=200, content={"message": "Profile updated successfullysuccessfully"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Profile update error: {e}"})
 
-@router.delete("/deactivate/", dependencies=[Depends(get_current_user)])
+# Deactivate User endpoint
+@router.delete("/deactiate_user/", dependencies=[Depends(get_current_user)])
 async def deactivate_user(token: str = Depends(get_current_user)):
-    db = create_mongo_connection()
-    phone_number = token
-    find_user = db["users"].find_one({"phone_number": phone_number})
-    if not find_user:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    db["users"].find_one_and_update({"phone_number": phone_number}, {"$set": {"is_active": False}})
-    return JSONResponse(status_code=200, content={"message": "User deactivated"})
+    try:
+        db = create_mongo_connection()
+        phone_number = token
+        find_user = db["users"].find_one({"phone_number": phone_number})
+        if not find_user:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        db["users"].find_one_and_update({"phone_number": phone_number}, {"$set": {"is_active": False}})
+        return JSONResponse(status_code=200, content={"message": "User deactivated"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Deactivation error: {e}"})
 
-@router.delete("/delete/", dependencies=[Depends(get_current_user)])
+# Delete User endpoint
+@router.delete("/user/", dependencies=[Depends(get_current_user)])
 async def delete_user(token: str = Depends(get_current_user)):
-    db = create_mongo_connection()
-    phone_number = token
-    find_user = db["users"].find_one({"phone_number": phone_number})
-    if not find_user:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    db["users"].delete_one({"phone_number": phone_number})
-    db["wastes"].delete_many({"phone_number": phone_number})
-    user_image_dir = f"images/{phone_number}"
-    if os.path.exists(user_image_dir):
-        shutil.rmtree(user_image_dir)
-    return JSONResponse(status_code=200, content={"message": "User deleted"})
+    try:
+        db = create_mongo_connection()
+        phone_number = token
+        find_user = db["users"].find_one({"phone_number": phone_number})
+        if not find_user:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        db["users"].delete_one({"phone_number": phone_number})
+        user_image_dir = f"images/{phone_number}"
+        if os.path.exists(user_image_dir):
+            shutil.rmtree(user_image_dir)
+        return JSONResponse(status_code=200, content={"message": "User deleted"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"Deletion error: {e}"})

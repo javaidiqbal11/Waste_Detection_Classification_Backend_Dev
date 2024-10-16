@@ -12,24 +12,22 @@ from app.dependencies import get_current_user
 
 router = APIRouter()
 
-@router.post("/", dependencies=[Depends(get_current_user)])
+@router.post("/save_data", dependencies=[Depends(get_current_user)])
 async def save_data(
     image_file: UploadFile = File(...),
     latitude: float = Query(...),
     longitude: float = Query(...),
     level: str = Query(...),
     token: str = Depends(get_current_user),
-    lang: str = "en"  # Optional language parameter for labels
+    lang: str = "en"
 ):
     phone_number = token
     image_path = save_image(phone_number, image_file)
     db = create_mongo_connection()
 
-    # Fetch annotations (IDs) from "wastes_copy" based on the level
     waste_data = db["wastes_copy"].find_one({"level": level})
     annotation_ids = waste_data.get("annotations", []) if waste_data else []
 
-    # Retrieve labels for these IDs from "classLabels" collection
     labels = {}
     for annotation_id in annotation_ids:
         class_label = db["classLabels"].find_one({"ID": annotation_id})
@@ -37,7 +35,6 @@ async def save_data(
             label = class_label.get("Eng") if lang == "en" else class_label.get("Fr")
             labels[annotation_id] = label
 
-    # Prepare the payload with all necessary information
     payload = {
         "phone_number": phone_number,
         "image_path": image_path,
@@ -52,23 +49,21 @@ async def save_data(
     save_data_to_db(payload)
     return JSONResponse(status_code=200, content={"message": "Data saved successfully"})
 
-@router.patch("/", dependencies=[Depends(get_current_user)])
+@router.patch("/save_data", dependencies=[Depends(get_current_user)])
 async def update_data(
     id: str = Query(...),
     annotations_str: str = Query(None),
     token: str = Depends(get_current_user),
-    lang: str = "en"  # Optional language parameter for labels
+    lang: str = "en"
 ):
     phone_number = token
     db = create_mongo_connection()
 
-    # Convert annotations from string format to list of IDs
     try:
         annotation_ids = eval(annotations_str) if annotations_str else []
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid annotations format: {str(e)}")
 
-    # Retrieve labels for these IDs from "classLabels" collection
     labels = {}
     for annotation_id in annotation_ids:
         class_label = db["classLabels"].find_one({"ID": annotation_id})
@@ -76,7 +71,6 @@ async def update_data(
             label = class_label.get("Eng") if lang == "en" else class_label.get("Fr")
             labels[annotation_id] = label
 
-    # Fetch existing data in "wastes_copy" for updating
     waste_data = db["wastes_copy"].find_one({"_id": ObjectId(id)})
     if not waste_data:
         raise HTTPException(status_code=404, detail="Data not found")
@@ -89,7 +83,6 @@ async def update_data(
 
     cropped_paths = []
     for annotation in annotation_ids:
-        # Assume each annotation contains the coordinates for cropping
         x1, y1, x2, y2 = annotation['x1'], annotation['y1'], annotation['x2'], annotation['y2']
         image = Image.open(image_path)
         cropped_image = image.crop((x1, y1, x2, y2))
@@ -98,10 +91,16 @@ async def update_data(
         cropped_image.save(cropped_image_path)
         cropped_paths.append(cropped_image_path)
 
-    # Prepare the payload with updated annotations and cropped paths
     payload = {
         "annotations": labels,
         "cropped_paths": cropped_paths,
     }
     update_data_in_db(id, payload)
     return JSONResponse(status_code=200, content={"message": "Data updated successfully"})
+
+@router.get("/save_data", dependencies=[Depends(get_current_user)])
+async def get_all_waste_data():
+    db = create_mongo_connection()
+    waste_data = db["wastes_copy"].find()
+    waste_list = [{**data, "_id": str(data["_id"])} for data in waste_data]
+    return JSONResponse(status_code=200, content={"data": waste_list})

@@ -6,7 +6,7 @@ python-multipart==0.0.5
 passlib==1.7.4
 python-jose==3.3.0
 Pillow==9.3.0
-reverse_geocoder==1.5.1  # Ensure this is present
+reverse_geocoder==1.5.1  
 pycountry==22.3.5
 pyotp==2.8.0
 bcrypt

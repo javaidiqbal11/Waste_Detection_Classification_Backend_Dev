@@ -16,7 +16,7 @@ ALGORITHM = "HS256"
 
 def create_mongo_connection():
     client = MongoClient(os.getenv("MONGODB_URI"))
-    return client[os.getenv("MONGODB_NAME")]
+    return client["wastedata"]
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
