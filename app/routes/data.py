@@ -29,21 +29,24 @@ async def save_data(
 
     phone_number: str = token.get("sub")
     image_path = save_image(phone_number, image_file)
-    
-    payload = {
-        "phone_number": phone_number,
-        "image_path": image_path,
-        "latitude": latitude,
-        "longitude": longitude,
-        "country": get_country_name(latitude, longitude),
-        "level": level,
-        "annotations": {},
-        "cropped_paths": [],
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    try:
+        payload = {
+            "phone_number": phone_number,
+            "image_path": image_path,
+            "latitude": latitude,
+            "longitude": longitude,
+            "country": get_country_name(latitude, longitude),
+            "level": level,
+            "annotations": {},
+            "cropped_paths": [],
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
-    save_data_to_db(payload)        
-    return JSONResponse(status_code=200, content={"message": "Data saved successfully"})
+        save_data_to_db(payload)        
+        return JSONResponse(status_code=200, content={"message": "Data saved successfully"})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.patch("/save_data", dependencies=[Depends(get_current_user)])
 async def update_data(
@@ -75,37 +78,48 @@ async def update_data(
         
     if not waste_data:
         raise HTTPException(status_code=404, detail="Data not found")
-
-    image_path = waste_data["image_path"]
-    image_file = image_path.split("/")[-1]
+    try:
+        image_path = waste_data["image_path"]
+        image_file = image_path.split("/")[-1]
+        
+        # Delete cropped images if exists in images folder
+        if os.path.exists(f"images/{phone_number}/cropped"):
+            for file in os.listdir(f"images/{phone_number}/cropped"):
+                if file.endswith(f"_{image_file}"):
+                    os.remove(f"images/{phone_number}/cropped/{file}")
     
-    # Delete cropped images if exists in images folder
-    if os.path.exists(f"images/{phone_number}/cropped"):
-        for file in os.listdir(f"images/{phone_number}/cropped"):
-            if file.endswith(f"_{image_file}"):
-                os.remove(f"images/{phone_number}/cropped/{file}")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Internal Server Error: {str(e)}"
+        )
     
     cordsNlabels=[]
     cropped_paths = []
     
-    annotation_list=annotations["annotations"]
-    for annotation_dict in annotation_list:
-        annotation_id=annotation_dict["label"]
-        if lang=='fr':
-            class_label = db["classLabels"].find_one({"Fr": annotation_id})
-        else:
-            class_label = db["classLabels"].find_one({"Eng": annotation_id})
-        
-        x1, y1, x2, y2 = annotation_dict['x1'], annotation_dict['y1'], annotation_dict['x2'], annotation_dict['y2']
-        
-        image = Image.open(image_path)
-        cordsNlabels.append({"label":int(class_label['ID']),"x1":x1, "y1":y1, "x2":x2, "y2":y2})
-        
-        cropped_image = image.crop((x1, y1, x2, y2))
-        cropped_image_filename = f"{uuid.uuid4()}_{os.path.basename(image_path)}"
-        cropped_image_path = f"{cropped_dir}/{cropped_image_filename}"
-        cropped_image.save(cropped_image_path)
-        cropped_paths.append(cropped_image_path)
+    try:
+        annotation_list=annotations["annotations"]
+        for annotation_dict in annotation_list:
+            annotation_id=annotation_dict["label"]
+            if lang=='fr':
+                class_label = db["classlabels"].find_one({"Fr": annotation_id})
+            else:
+                class_label = db["classlabels"].find_one({"Eng": annotation_id})
+            
+            x1, y1, x2, y2 = annotation_dict['x1'], annotation_dict['y1'], annotation_dict['x2'], annotation_dict['y2']
+            
+            image = Image.open(image_path)
+            cordsNlabels.append({"label":int(class_label['ID']),"x1":x1, "y1":y1, "x2":x2, "y2":y2})
+            
+            cropped_image = image.crop((x1, y1, x2, y2))
+            cropped_image_filename = f"{uuid.uuid4()}_{os.path.basename(image_path)}"
+            cropped_image_path = f"{cropped_dir}/{cropped_image_filename}"
+            cropped_image.save(cropped_image_path)
+            cropped_paths.append(cropped_image_path)
+    
+    except Exception as e:
+        raise HTTPException(    
+            status_code=500, detail=f"Internal Server Error IMG: {str(e)}"
+        )
 
     payload = {
         "annotations": cordsNlabels,
@@ -128,6 +142,7 @@ async def get_all_waste_data(
     FindUser = db["users"].find_one({"phone_number": phone_number})
     if FindUser is None:
         raise HTTPException(
+            
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
@@ -139,7 +154,7 @@ async def get_all_waste_data(
         if "annotations" in waste_data:
             for annotation in waste_data["annotations"]:
                 label_id = annotation["label"]
-                class_label_obj = db["classLabels"].find_one({"ID": str(label_id)})
+                class_label_obj = db["classlabels"].find_one({"ID": str(label_id)})
             
                 if lang=='fr':
                     class_label=class_label_obj["Fr"]
@@ -155,4 +170,3 @@ async def get_all_waste_data(
         status_code=200,
         content={"message": "Operation Successful", "data": AllWasteData},
     )
-
