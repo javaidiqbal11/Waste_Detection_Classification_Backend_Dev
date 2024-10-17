@@ -15,6 +15,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     return payload
 
 async def get_user_role(token: str = Depends(oauth2_scheme), required_role: str = "user"):
+    
     payload = verify_token(token)
     if not payload or payload.get("role") != required_role:
         raise HTTPException(
