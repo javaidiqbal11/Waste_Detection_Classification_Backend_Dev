@@ -11,12 +11,12 @@ import pycountry
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY", "default_secret_key")
 ALGORITHM = "HS256"
 
 def create_mongo_connection():
     client = MongoClient(os.getenv("MONGODB_URI"))
-    return client["wastedata"]
+    return client["wastedata_test"]
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
@@ -27,7 +27,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 def verify_token(token: str):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
